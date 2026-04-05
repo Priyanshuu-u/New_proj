@@ -1,0 +1,40 @@
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@500;700&family=Source+Sans+3:wght@400;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color: #131722;
+  background: radial-gradient(circle at top left, #f9e7d5 0%, #f6f0e8 40%, #e8f7f1 100%);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: 'Source Sans 3', sans-serif;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.shell {
+  @apply mx-auto max-w-6xl px-4 py-6 md:px-8;
+}
+
+.card {
+  @apply rounded-2xl border border-black/10 bg-white/85 p-4 shadow-sm backdrop-blur-sm;
+}
+
+.btn {
+  @apply rounded-xl px-4 py-2 font-semibold;
+}
+
+.btn-primary {
+  @apply bg-ink text-sand hover:bg-black;
+}
+
+.btn-ghost {
+  @apply border border-ink/25 bg-white hover:bg-sand;
+}
