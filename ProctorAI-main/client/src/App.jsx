@@ -20,41 +20,70 @@ function NavBar() {
   const { user, logout } = useAuth();
 
   return (
-    <header className="border-b border-black/10 bg-gradient-to-r from-white to-sky-50 shadow-sm">
-      <div className="shell flex items-center justify-between py-4">
-        <Link className="font-heading text-2xl font-bold bg-gradient-to-r from-sky-600 to-sky-700 bg-clip-text text-transparent" to="/">
+    <header className="border-b border-slate-200 bg-white shadow-sm sticky top-0 z-50">
+      <div className="shell flex items-center justify-between py-3">
+        <Link
+          className="font-heading text-xl font-bold text-slate-900 flex items-center gap-2"
+          to="/"
+        >
+          <span className="w-8 h-8 bg-slate-900 rounded-lg flex items-center justify-center text-white text-xs font-bold">
+            P
+          </span>
           ProctorAI
         </Link>
+
         {user ? (
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-1">
             {user.role === "examiner" ? (
               <>
-                <Link className="text-sm text-black/70 hover:text-sky-600 transition-colors" to="/dashboard">
+                <Link
+                  className="text-sm text-slate-600 hover:text-slate-900 hover:bg-slate-100 px-3 py-2 rounded-lg transition-colors font-medium"
+                  to="/dashboard"
+                >
                   Dashboard
                 </Link>
-                <Link className="text-sm text-black/70 hover:text-sky-600 transition-colors" to="/tests">
+                <Link
+                  className="text-sm text-slate-600 hover:text-slate-900 hover:bg-slate-100 px-3 py-2 rounded-lg transition-colors font-medium"
+                  to="/tests"
+                >
                   Tests
                 </Link>
               </>
             ) : (
-              <Link className="text-sm text-black/70 hover:text-sky-600 transition-colors" to="/home">
-                My Tests
+              <Link
+                className="text-sm text-slate-600 hover:text-slate-900 hover:bg-slate-100 px-3 py-2 rounded-lg transition-colors font-medium"
+                to="/home"
+              >
+                My Exams
               </Link>
             )}
-            <span className="text-sm text-black/50 border-l border-black/10 pl-4">
-              {user.name} <span className="text-xs bg-sky-100 text-sky-700 px-2 py-1 rounded ml-2">{user.role}</span>
-            </span>
-            <button className="text-sm text-black/70 hover:text-red-600 transition-colors" onClick={logout}>
-              Logout
-            </button>
+
+            <div className="ml-2 pl-3 border-l border-slate-200 flex items-center gap-2">
+              <div className="text-right hidden sm:block">
+                <p className="text-sm font-semibold text-slate-900 leading-none">{user.name}</p>
+                <p className="text-xs text-slate-400 capitalize mt-0.5">{user.role}</p>
+              </div>
+              <button
+                className="text-sm text-slate-500 hover:text-red-600 hover:bg-red-50 px-3 py-2 rounded-lg transition-colors font-medium"
+                onClick={logout}
+              >
+                Sign out
+              </button>
+            </div>
           </div>
         ) : (
-          <div className="flex gap-3">
-            <Link className="text-sm text-black/70 hover:text-sky-600 transition-colors" to="/login">
-              Login
+          <div className="flex items-center gap-2">
+            <Link
+              className="text-sm font-medium text-slate-600 hover:text-slate-900 px-3 py-2 rounded-lg hover:bg-slate-100 transition-colors"
+              to="/login"
+            >
+              Sign in
             </Link>
-            <Link className="bg-gradient-to-r from-sky-500 to-sky-600 text-white text-sm px-4 py-2 rounded-lg hover:shadow-md transition-shadow" to="/register">
-              Register
+            <Link
+              className="btn btn-primary text-sm py-2"
+              to="/register"
+            >
+              Get Started
             </Link>
           </div>
         )}

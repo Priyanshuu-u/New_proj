@@ -335,16 +335,16 @@ export function useDetection({
     if (objectDetector && frame?.imageData) {
       try {
         const yoloPredictions = await objectDetector(frame.imageData, {
-          threshold: 0.05,
-          topk: 30,
+          threshold: 0.01,
+          topk: 50,
         });
 
         const normalizedYolo = normalizeObjectPredictions(yoloPredictions);
         const phoneMatch = normalizedYolo.find(
-          (item) => isPhoneLabel(item.label) && item.score >= 0.04,
+          (item) => isPhoneLabel(item.label) && item.score >= 0.015,
         );
         const bookMatch = normalizedYolo.find(
-          (item) => isBookLabel(item.label) && item.score >= 0.03,
+          (item) => isBookLabel(item.label) && item.score >= 0.015,
         );
 
         if (phoneMatch) {
@@ -363,12 +363,12 @@ export function useDetection({
 
     if (cocoModel && frame?.canvas) {
       try {
-        const cocoPredictions = await cocoModel.detect(frame.canvas);
+        const cocoPredictions = await cocoModel.detect(frame.canvas, 20, 0.01);
         const normalizedCoco = normalizeObjectPredictions(cocoPredictions);
         
         if (!phoneDetectedNow) {
           const phoneMatch = normalizedCoco.find(
-            (item) => isPhoneLabel(item.label) && item.score >= 0.05,
+            (item) => isPhoneLabel(item.label) && item.score >= 0.02,
           );
           if (phoneMatch) {
             phoneDetectedNow = true;
@@ -378,7 +378,7 @@ export function useDetection({
 
         if (!bookDetectedNow) {
           const bookMatch = normalizedCoco.find(
-            (item) => isBookLabel(item.label) && item.score >= 0.04,
+            (item) => isBookLabel(item.label) && item.score >= 0.02,
           );
           if (bookMatch) {
             bookDetectedNow = true;
@@ -432,6 +432,7 @@ export function useDetection({
         return false;
       }
 
+      // ── Horizontal head turn (X-axis) ─────────────────────────────────────
       const eyeCenterX =
         (leftEyeOuter.x + leftEyeInner.x + rightEyeInner.x + rightEyeOuter.x) /
         4;
@@ -441,34 +442,62 @@ export function useDetection({
       );
       const noseOffsetRatio = Math.abs(nose.x - eyeCenterX) / eyeWidth;
 
-      const leftIris = lm[468];
-      const rightIris = lm[473];
-      const leftIrisShift =
-        leftIris && leftEyeInner && leftEyeOuter
-          ? Math.abs(leftIris.x - (leftEyeOuter.x + leftEyeInner.x) / 2) /
-            Math.max(0.001, Math.abs(leftEyeInner.x - leftEyeOuter.x))
-          : 0;
-      const rightIrisShift =
-        rightIris && rightEyeInner && rightEyeOuter
-          ? Math.abs(rightIris.x - (rightEyeOuter.x + rightEyeInner.x) / 2) /
-            Math.max(0.001, Math.abs(rightEyeOuter.x - rightEyeInner.x))
-          : 0;
-
       const leftNoseGap = Math.abs(nose.x - leftEyeOuter.x);
       const rightNoseGap = Math.abs(rightEyeOuter.x - nose.x);
       const turnRatio =
         Math.max(leftNoseGap, rightNoseGap) /
         Math.max(0.001, Math.min(leftNoseGap, rightNoseGap));
 
+      // ── Horizontal iris shift (X-axis) — raised to avoid screen-reading FP ─
+      const leftIris = lm[468];
+      const rightIris = lm[473];
+      const leftIrisXShift =
+        leftIris && leftEyeInner && leftEyeOuter
+          ? Math.abs(leftIris.x - (leftEyeOuter.x + leftEyeInner.x) / 2) /
+            Math.max(0.001, Math.abs(leftEyeInner.x - leftEyeOuter.x))
+          : 0;
+      const rightIrisXShift =
+        rightIris && rightEyeInner && rightEyeOuter
+          ? Math.abs(rightIris.x - (rightEyeOuter.x + rightEyeInner.x) / 2) /
+            Math.max(0.001, Math.abs(rightEyeOuter.x - rightEyeInner.x))
+          : 0;
+
+      // ── Vertical iris shift (Y-axis) — detects looking DOWN at phone/notes ─
+      // Landmarks: upper lid 159 (L) / 386 (R), lower lid 145 (L) / 374 (R)
+      const leftEyeTop = lm[159];
+      const leftEyeBottom = lm[145];
+      const rightEyeTop = lm[386];
+      const rightEyeBottom = lm[374];
+
+      const leftIrisYShift =
+        leftIris && leftEyeTop && leftEyeBottom
+          ? (leftIris.y - (leftEyeTop.y + leftEyeBottom.y) / 2) /
+            Math.max(0.001, Math.abs(leftEyeBottom.y - leftEyeTop.y))
+          : 0;
+      const rightIrisYShift =
+        rightIris && rightEyeTop && rightEyeBottom
+          ? (rightIris.y - (rightEyeTop.y + rightEyeBottom.y) / 2) /
+            Math.max(0.001, Math.abs(rightEyeBottom.y - rightEyeTop.y))
+          : 0;
+
+      // Positive Y shift = iris moved toward lower lid = looking DOWN
+      const lookingDown = leftIrisYShift > 0.30 || rightIrisYShift > 0.30;
+      // Negative Y shift = iris moved toward upper lid = looking UP (also suspicious)
+      const lookingUp = leftIrisYShift < -0.35 || rightIrisYShift < -0.35;
+
+      // ── Head position in frame ──────────────────────────────────────────────
       const faceCenterY = (face.topLeft?.[1] + face.bottomRight?.[1]) / 2;
-      const headTooLow = faceCenterY > (video.videoHeight || 1) * 0.72;
-      const headTooHigh = faceCenterY < (video.videoHeight || 1) * 0.22;
+      // headTooLow catches head physically tilted down toward desk/lap
+      const headTooLow = faceCenterY > (video.videoHeight || 1) * 0.70;
+      const headTooHigh = faceCenterY < (video.videoHeight || 1) * 0.15;
 
       return (
-        noseOffsetRatio > 0.15 ||
-        turnRatio > 1.3 ||
-        leftIrisShift > 0.2 ||
-        rightIrisShift > 0.2 ||
+        noseOffsetRatio > 0.35 ||   // clear horizontal head turn
+        turnRatio > 2.2 ||           // strong rotational asymmetry
+        leftIrisXShift > 0.48 ||     // extreme horizontal eye movement
+        rightIrisXShift > 0.48 ||    // extreme horizontal eye movement
+        lookingDown ||               // eyes directed downward (phone/notes on desk)
+        lookingUp ||                 // eyes directed upward (suspicious)
         headTooLow ||
         headTooHigh
       );
@@ -550,10 +579,16 @@ export function useDetection({
       normalized === "exercise book" ||
       normalized === "magazine" ||
       normalized === "pamphlet" ||
+      normalized === "binder" ||
+      normalized === "folder" ||
+      normalized === "document" ||
+      normalized === "paper" ||
       normalized.includes("notebook") ||
       normalized.includes("book") ||
       normalized.includes("magazine") ||
-      normalized.includes("paper")
+      normalized.includes("paper") ||
+      normalized.includes("binder") ||
+      normalized.includes("folder")
     );
   }
 
@@ -574,7 +609,7 @@ export function useDetection({
     const srcH = video.videoHeight || 0;
     if (!srcW || !srcH) return null;
 
-    const maxW = 640;
+    const maxW = 960;
     const scale = Math.min(1, maxW / srcW);
     const w = Math.max(1, Math.floor(srcW * scale));
     const h = Math.max(1, Math.floor(srcH * scale));
