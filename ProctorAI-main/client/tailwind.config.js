@@ -4,14 +4,14 @@ export default {
   theme: {
     extend: {
       colors: {
-        ink: "#131722",
-        mint: "#89e0c9",
-        sand: "#f6f0e8",
-        signal: "#f05e4e",
+        ink: "#0f172a",
+        mint: "#10b981",
+        sand: "#f8fafc",
+        signal: "#ef4444",
       },
       fontFamily: {
         heading: ["Poppins", "ui-sans-serif", "system-ui"],
-        body: ["Source Sans 3", "ui-sans-serif", "system-ui"],
+        body: ["Inter", "ui-sans-serif", "system-ui"],
       },
     },
   },

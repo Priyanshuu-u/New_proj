@@ -1,40 +1,185 @@
-@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@500;700&family=Source+Sans+3:wght@400;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700&family=Inter:wght@400;500;600&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  color: #131722;
-  background: radial-gradient(circle at top left, #f9e7d5 0%, #f6f0e8 40%, #e8f7f1 100%);
+  color: #0f172a;
+  background: #f8fafc;
 }
 
 body {
   margin: 0;
   min-height: 100vh;
-  font-family: 'Source Sans 3', sans-serif;
+  font-family: 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
 #root {
   min-height: 100vh;
 }
 
+/* Layout */
 .shell {
   @apply mx-auto max-w-6xl px-4 py-6 md:px-8;
 }
 
+/* Cards */
 .card {
-  @apply rounded-2xl border border-black/10 bg-white/85 p-4 shadow-sm backdrop-blur-sm;
+  @apply rounded-2xl border border-slate-200 bg-white p-5 shadow-sm;
 }
 
+.card-dark {
+  @apply rounded-2xl bg-slate-900 text-white p-5 shadow-lg;
+}
+
+/* Buttons */
 .btn {
-  @apply rounded-xl px-4 py-2 font-semibold;
+  @apply inline-flex items-center justify-center rounded-xl px-4 py-2.5 font-semibold text-sm transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed;
 }
 
 .btn-primary {
-  @apply bg-ink text-sand hover:bg-black;
+  @apply bg-slate-900 text-white hover:bg-slate-800 focus:ring-slate-500 shadow-sm hover:shadow-md;
+}
+
+.btn-danger {
+  @apply bg-red-600 text-white hover:bg-red-700 focus:ring-red-400 shadow-sm hover:shadow-md;
 }
 
 .btn-ghost {
-  @apply border border-ink/25 bg-white hover:bg-sand;
+  @apply border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 focus:ring-slate-300;
 }
+
+.btn-success {
+  @apply bg-emerald-600 text-white hover:bg-emerald-700 focus:ring-emerald-400;
+}
+
+/* Badge */
+.badge {
+  @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold;
+}
+
+.badge-green {
+  @apply bg-emerald-100 text-emerald-700;
+}
+
+.badge-amber {
+  @apply bg-amber-100 text-amber-700;
+}
+
+.badge-red {
+  @apply bg-red-100 text-red-700;
+}
+
+.badge-blue {
+  @apply bg-blue-100 text-blue-700;
+}
+
+.badge-slate {
+  @apply bg-slate-100 text-slate-600;
+}
+
+/* Violation alert animation */
+@keyframes slideDown {
+  from {
+    transform: translateY(-110%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateY(-110%);
+    opacity: 0;
+  }
+}
+
+.violation-enter {
+  animation: slideDown 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+.violation-exit {
+  animation: slideUp 0.3s ease-in forwards;
+}
+
+/* Live pulse dot */
+@keyframes livePulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+}
+
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #10b981;
+  animation: livePulse 1.5s ease-in-out infinite;
+  display: inline-block;
+}
+
+/* Score bar */
+.score-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.score-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.6s ease, background-color 0.4s ease;
+}
+
+/* Question option custom radio */
+.option-label {
+  @apply flex items-start gap-3 rounded-xl border-2 border-slate-200 p-3.5 cursor-pointer transition-all duration-150 hover:border-slate-400 hover:bg-slate-50;
+}
+
+.option-label.selected {
+  @apply border-slate-900 bg-slate-900 text-white;
+}
+
+.option-label input[type="radio"] {
+  @apply sr-only;
+}
+
+/* Proctor webcam container */
+.webcam-wrapper {
+  @apply relative overflow-hidden rounded-xl bg-black;
+  aspect-ratio: 4/3;
+}
+
+.webcam-wrapper video {
+  @apply absolute inset-0 w-full h-full object-cover;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Ink / sand kept for backwards compat */
+.text-ink { color: #0f172a; }
+.bg-ink { background-color: #0f172a; }
+.text-sand { color: #f6f0e8; }
+.text-signal { color: #ef4444; }

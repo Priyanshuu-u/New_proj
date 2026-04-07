@@ -11,18 +11,19 @@ const ToastContext = createContext(null);
 function ToastItem({ toast }) {
   const styles =
     toast.type === "error"
-      ? "border-red-300 bg-red-50 text-red-800"
+      ? "bg-red-600 text-white"
       : toast.type === "success"
-        ? "border-emerald-300 bg-emerald-50 text-emerald-800"
-        : "border-sky-300 bg-sky-50 text-sky-800";
+        ? "bg-emerald-600 text-white"
+        : "bg-slate-800 text-white";
 
   return (
     <div
-      className={`min-w-[260px] rounded-xl border px-3 py-2 shadow ${styles}`}
+      className={`min-w-[280px] max-w-sm rounded-xl px-4 py-3 shadow-lg ${styles}`}
+      style={{ animation: "slideDown 0.3s cubic-bezier(0.34,1.56,0.64,1) forwards" }}
     >
-      <p className="text-sm font-semibold">{toast.title}</p>
+      <p className="text-sm font-semibold leading-snug">{toast.title}</p>
       {toast.message ? (
-        <p className="text-xs opacity-90">{toast.message}</p>
+        <p className="text-xs opacity-80 mt-0.5">{toast.message}</p>
       ) : null}
     </div>
   );
@@ -44,7 +45,7 @@ export function ToastProvider({ children }) {
   return (
     <ToastContext.Provider value={value}>
       {children}
-      <div className="pointer-events-none fixed right-4 top-4 z-[100] flex flex-col gap-2">
+      <div className="pointer-events-none fixed right-4 bottom-4 z-[100] flex flex-col gap-2">
         {toasts.map((toast) => (
           <ToastItem key={toast.id} toast={toast} />
         ))}
