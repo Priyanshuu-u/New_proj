@@ -11,22 +11,24 @@ import { useSocket } from "../../hooks/useSocket.js";
 import { useAuth } from "../../context/AuthContext.jsx";
 import { useToast } from "../../context/ToastContext.jsx";
 
-function ScoreBar({ score }) {
+function ScoreBar({ score, showLabel = true }) {
   let fillColor = "#10b981"; // green
   if (score > 60) fillColor = "#ef4444"; // red
   else if (score > 30) fillColor = "#f59e0b"; // amber
 
   return (
     <div>
-      <div className="flex justify-between items-center mb-1.5">
-        <span className="text-xs text-slate-400 font-medium">Risk Score</span>
-        <span
-          className="text-xs font-bold"
-          style={{ color: fillColor }}
-        >
-          {score}/100
-        </span>
-      </div>
+      {showLabel && (
+        <div className="flex justify-between items-center mb-1.5">
+          <span className="text-xs text-slate-400 font-medium">Risk Score</span>
+          <span
+            className="text-xs font-bold"
+            style={{ color: fillColor }}
+          >
+            {score}/100
+          </span>
+        </div>
+      )}
       <div className="score-bar">
         <div
           className="score-bar-fill"
@@ -227,7 +229,10 @@ export default function ExamWindow() {
   const statusLabel = detectorInfo || detectorStatus;
   const detectorReady = !["initializing", "loading", "retrying"].includes(statusLabel);
   const secureEnvironmentReady = cameraReady && detectorReady;
-  const maxViolations = test?.maxViolationsAllowed || 8;
+  const maxViolations = Math.max(
+    4,
+    Math.min(test?.maxViolationsAllowed ?? 8, 15),
+  );
 
   async function enterFullscreen() {
     try {
@@ -429,49 +434,64 @@ export default function ExamWindow() {
           {/* Proctor sidebar */}
           <div className="space-y-4">
             {/* Webcam card */}
-            <div className="card-dark space-y-3">
-              <div className="flex items-center justify-between">
-                <h2 className="font-heading font-semibold text-sm text-white/90 uppercase tracking-wide">
-                  Proctor Feed
-                </h2>
+            <div className="card-dark space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.14em] text-white/60 font-semibold">
+                    Proctor Feed
+                  </p>
+                  <p className="text-xs text-white/50">Face, gaze, objects, tab-focus</p>
+                </div>
                 <DetectorStatusBadge status={statusLabel} />
               </div>
 
-              <WebcamFeed
-                videoRef={videoRef}
-                showLive={cameraReady}
-                statusLabel={statusLabel.startsWith("face:") ? "AI Active" : ""}
-              />
-
-              <ScoreBar score={suspicionScore} />
-
-              {/* Violations counter */}
-              <div className="flex items-center justify-between bg-white/10 rounded-xl px-4 py-3">
-                <div>
-                  <p className="text-xs text-white/50 font-medium">Violations</p>
-                  <p className={`font-bold text-xl tabular-nums ${
-                    violationsCount >= maxViolations * 0.75
-                      ? "text-red-400"
-                      : violationsCount >= maxViolations * 0.5
-                      ? "text-amber-400"
-                      : "text-white"
-                  }`}>
-                    {violationsCount}
-                    <span className="text-white/40 font-normal text-sm ml-1">/ {maxViolations}</span>
-                  </p>
-                </div>
-                <div className="text-right">
-                  <p className="text-xs text-white/50 font-medium">Questions</p>
-                  <p className="font-bold text-xl text-white tabular-nums">
-                    {questions.filter((q) => answers[q._id] && answers[q._id] !== "").length}
-                    <span className="text-white/40 font-normal text-sm ml-1">/ {questions.length}</span>
-                  </p>
+              <div className="relative overflow-hidden rounded-xl ring-1 ring-white/10 shadow-lg">
+                <WebcamFeed
+                  videoRef={videoRef}
+                  showLive={cameraReady}
+                  statusLabel=""
+                />
+                <div className="absolute left-3 bottom-3 bg-black/65 text-white text-[11px] px-3 py-1.5 rounded-full backdrop-blur flex items-center gap-2">
+                  <span className="live-dot" />
+                  <span className="font-semibold tracking-wide">AI Guard On</span>
                 </div>
               </div>
 
-              <p className="text-xs text-white/30 text-center leading-relaxed">
-                Gaze, face, objects, tab switches &amp; fullscreen are monitored
-              </p>
+              <div className="space-y-2">
+                <ScoreBar score={suspicionScore} showLabel={false} />
+                <div className="flex items-center justify-between text-[11px] text-white/60 mt-1">
+                  <span>Risk Score</span>
+                  <span className="font-semibold text-white">{suspicionScore}/100</span>
+                </div>
+              </div>
+
+              {/* Violations & progress */}
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <StatPill
+                  label="Violations"
+                  value={violationsCount}
+                  hint={`limit ${maxViolations}`}
+                  tone={
+                    violationsCount >= maxViolations * 0.75
+                      ? "red"
+                      : violationsCount >= maxViolations * 0.5
+                        ? "amber"
+                        : "slate"
+                  }
+                />
+                <StatPill
+                  label="Answered"
+                  value={questions.filter((q) => answers[q._id] && answers[q._id] !== "").length}
+                  hint={`/ ${questions.length}`}
+                  tone="slate"
+                />
+                <StatPill
+                  label="Fullscreen"
+                  value={isFullscreen ? "On" : "Off"}
+                  hint={statusLabel.includes("degraded") ? "degraded" : "secure"}
+                  tone={isFullscreen ? "green" : "amber"}
+                />
+              </div>
             </div>
 
             {/* Submit button */}
@@ -516,6 +536,27 @@ function CheckItem({ label, ok, loading, detail }) {
         {detail && !ok && (
           <p className="text-xs text-slate-400">{detail}</p>
         )}
+      </div>
+    </div>
+  );
+}
+
+function StatPill({ label, value, hint = "", tone = "slate" }) {
+  const colors = {
+    red: "bg-red-100 text-red-800 ring-red-200",
+    amber: "bg-amber-100 text-amber-800 ring-amber-200",
+    green: "bg-emerald-100 text-emerald-800 ring-emerald-200",
+    slate: "bg-white/10 text-white ring-white/10",
+  }[tone] || "bg-white/10 text-white ring-white/10";
+
+  return (
+    <div className={`rounded-xl px-3 py-2.5 ring-1 ${colors} shadow-inner`}>
+      <p className="text-[11px] uppercase tracking-[0.18em] font-semibold opacity-70">
+        {label}
+      </p>
+      <div className="flex items-baseline justify-center gap-1 mt-0.5">
+        <span className="text-lg font-bold tabular-nums">{value}</span>
+        {hint && <span className="text-[11px] font-semibold opacity-60">{hint}</span>}
       </div>
     </div>
   );
