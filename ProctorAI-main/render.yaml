@@ -4,10 +4,8 @@ services:
     env: node
     region: oregon
     rootDir: server
-    buildCommand: |
-      npm install --production
-    startCommand: |
-      node index.js
+    buildCommand: npm install --production
+    startCommand: node index.js
     envVars:
       - key: NODE_ENV
         value: production
@@ -21,16 +19,3 @@ services:
         sync: false
       - key: CLIENT_URL
         value: https://proctorai-client.onrender.com
-
-  - type: static
-    name: proctorai-client
-    buildCommand: |
-      cd client && npm install && npm run build
-    publishDirectory: client/dist
-    envVars:
-      - key: VITE_API_URL
-        value: https://proctorai-api.onrender.com
-      - key: VITE_SOCKET_URL
-        value: https://proctorai-api.onrender.com
-      - key: VITE_PROCTOR_DEBUG
-        value: "false"
