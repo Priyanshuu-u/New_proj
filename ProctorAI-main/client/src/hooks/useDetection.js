@@ -16,30 +16,30 @@ const POINTS = {
 };
 
 const COOLDOWNS = {
-  gaze_away: 2500,
-  phone_detected: 2500,
-  book_detected: 2500,
-  multiple_faces: 2500,
-  no_face: 2500,
-  fullscreen_exit: 2500,
-  tab_switch: 2500,
-  window_blur: 2500,
-  copy: 1800,
-  cut: 1800,
-  paste: 2200,
-  context_menu: 1800,
-  default: 2500,
+  gaze_away: 1600,
+  phone_detected: 1800,
+  book_detected: 1800,
+  multiple_faces: 2000,
+  no_face: 1800,
+  fullscreen_exit: 1800,
+  tab_switch: 2000,
+  window_blur: 1800,
+  copy: 1500,
+  cut: 1500,
+  paste: 2000,
+  context_menu: 1500,
+  default: 1800,
 };
 
 const OBJECT_THRESHOLDS = {
-  // Lower thresholds so short edge-of-frame appearances are caught, still guarded by streaks.
-  yolo: { phone: 0.22, book: 0.20 },
-  coco: { phone: 0.28, book: 0.26 },
+  // Aggressive thresholds for edge-of-frame objects.
+  yolo: { phone: 0.14, book: 0.12 },
+  coco: { phone: 0.14, book: 0.12 },
 };
 
 const OBJECT_STREAK_TARGET = 1; // consecutive frames needed before flagging
 const GAZE_STREAK_TARGET = 2; // frames looking away before warning
-const DETECTION_INTERVAL_MS = 500;
+const DETECTION_INTERVAL_MS = 300;
 
 export function useDetection({
   videoRef,
@@ -53,6 +53,13 @@ export function useDetection({
   const [suspicionScore, setSuspicionScore] = useState(0);
   const [violationsCount, setViolationsCount] = useState(0);
   const [detectorStatus, setDetectorStatus] = useState("initializing");
+  const [debugMeta, setDebugMeta] = useState({
+    faces: 0,
+    phone: false,
+    book: false,
+    faceMode: "none",
+    objectMode: "none",
+  });
   const awayStreak = useRef(0);
   const modelsRef = useRef({
     ready: false,
@@ -65,6 +72,8 @@ export function useDetection({
   });
   const frameCanvasRef = useRef(document.createElement("canvas"));
   const snapshotCanvasRef = useRef(document.createElement("canvas"));
+  const deskCanvasRef = useRef(document.createElement("canvas"));
+  const deskRightCanvasRef = useRef(document.createElement("canvas"));
   const loadingRef = useRef(false);
   const lastViolationAtRef = useRef({});
   const objectStreakRef = useRef({ phone: 0, book: 0 });
@@ -176,21 +185,7 @@ export function useDetection({
         blazeFaceDetector = null;
       }
 
-      try {
-        const { pipeline, env } = await import("@xenova/transformers");
-
-        env.allowLocalModels = false;
-        env.allowRemoteModels = true;
-        env.useBrowserCache = true;
-
-        objectDetector = await pipeline("object-detection", "Xenova/yolov8s");
-        objectMode = "yolov8s";
-      } catch (_error) {
-        objectDetector = null;
-        objectMode = "none";
-      }
-
-      // Reliability fallback: keep a second object model path active.
+      // 1) Load COCO-SSD first (fast, reliable)
       try {
         const cocoSsd = await import("@tensorflow-models/coco-ssd");
         const tf = await import("@tensorflow/tfjs");
@@ -202,9 +197,24 @@ export function useDetection({
         }
         await tf.ready();
         cocoModel = await cocoSsd.load();
-        objectMode = objectMode === "none" ? "coco-ssd" : `${objectMode}+coco`;
+        objectMode = "coco-ssd";
       } catch (_error) {
         cocoModel = null;
+      }
+
+      // 2) Load YOLOv8s (Xenova) if possible
+      try {
+        const { pipeline, env } = await import("@xenova/transformers");
+
+        env.allowLocalModels = false;
+        env.allowRemoteModels = true;
+        env.useBrowserCache = true;
+
+        objectDetector = await pipeline("object-detection", "Xenova/yolov8s");
+        objectMode =
+          objectMode === "none" ? "yolov8s" : `${objectMode}+yolov8s`;
+      } catch (_error) {
+        objectDetector = objectDetector || null;
       }
 
       modelsRef.current = {
@@ -228,6 +238,20 @@ export function useDetection({
           : `face:${faceMode}|object:${objectMode}`;
       setDetectorStatus(status);
       onStatus?.(status);
+      setDebugMeta((prev) => ({
+        ...prev,
+        faceMode,
+        objectMode,
+      }));
+
+      if (!objectDetector && !cocoModel) {
+        retryTimeoutRef.current = window.setTimeout(() => {
+          loadingRef.current = false;
+          setDetectorStatus("retrying");
+          onStatus?.("retrying");
+          setRetryTick((v) => v + 1);
+        }, 4000);
+      }
 
       if (!objectDetector && !cocoModel) {
         retryTimeoutRef.current = window.setTimeout(() => {
@@ -381,15 +405,33 @@ export function useDetection({
     let bookSnapshotNow = "";
 
     const frame = getFrameCapture(video);
+    const deskFrame = getDeskCapture(video);
+    const deskRightFrame = getDeskRightCapture(video);
 
     if (objectDetector && frame?.imageData) {
       try {
-        const yoloPredictions = await objectDetector(frame.imageData, {
-          threshold: 0.01,
+        const baseCall = objectDetector(frame.imageData, {
+          threshold: 0.008,
           topk: 50,
         });
+        const deskCall =
+          deskFrame?.imageData &&
+          objectDetector(deskFrame.imageData, { threshold: 0.008, topk: 50 });
+        const deskRightCall =
+          deskRightFrame?.imageData &&
+          objectDetector(deskRightFrame.imageData, { threshold: 0.008, topk: 50 });
 
-        const normalizedYolo = normalizeObjectPredictions(yoloPredictions);
+        const [basePreds, deskPreds, deskRightPreds] = await Promise.all([
+          baseCall.catch(() => []),
+          deskCall ? deskCall.catch(() => []) : Promise.resolve([]),
+          deskRightCall ? deskRightCall.catch(() => []) : Promise.resolve([]),
+        ]);
+
+        const normalizedYolo = normalizeObjectPredictions([
+          ...(basePreds || []),
+          ...(deskPreds || []),
+          ...(deskRightPreds || []),
+        ]);
         const phoneMatch = normalizedYolo.find(
           (item) =>
             isPhoneLabel(item.label) &&
@@ -416,8 +458,19 @@ export function useDetection({
 
     if (cocoModel && frame?.canvas) {
       try {
-        const cocoPredictions = await cocoModel.detect(frame.canvas, 20, 0.01);
-        const normalizedCoco = normalizeObjectPredictions(cocoPredictions);
+        const cocoPredictions = await cocoModel.detect(frame.canvas, 20, 0.005);
+        const deskPredictions = deskFrame?.canvas
+          ? await cocoModel.detect(deskFrame.canvas, 20, 0.005)
+          : [];
+        const deskRightPredictions = deskRightFrame?.canvas
+          ? await cocoModel.detect(deskRightFrame.canvas, 20, 0.005)
+          : [];
+
+        const normalizedCoco = normalizeObjectPredictions([
+          ...(cocoPredictions || []),
+          ...(deskPredictions || []),
+          ...(deskRightPredictions || []),
+        ]);
 
         if (!phoneDetectedNow) {
           const phoneMatch = normalizedCoco.find(
@@ -472,10 +525,18 @@ export function useDetection({
       logViolation("book_detected", "medium", bookSnapshotNow || "", video);
       objectStreakRef.current.book = 0;
     }
+
+    setDebugMeta({
+      faces: faceCount,
+      phone: phoneDetectedNow,
+      book: bookDetectedNow,
+      faceMode,
+      objectMode,
+    });
   }
 
   function isFaceLookingAway(face, faceMode, video) {
-    if (faceMode === "mediapipe" && Array.isArray(face.landmarks)) {
+    if (faceMode.includes("mediapipe") && Array.isArray(face.landmarks)) {
       const lm = face.landmarks;
       const nose = lm[1];
       const leftEyeOuter = lm[33];
@@ -542,9 +603,9 @@ export function useDetection({
           : 0;
 
       // Positive Y shift = iris moved toward lower lid = looking DOWN
-      const lookingDown = leftIrisYShift > 0.18 || rightIrisYShift > 0.18;
+      const lookingDown = leftIrisYShift > 0.14 || rightIrisYShift > 0.14;
       // Negative Y shift = iris moved toward upper lid = looking UP (also suspicious)
-      const lookingUp = leftIrisYShift < -0.25 || rightIrisYShift < -0.25;
+      const lookingUp = leftIrisYShift < -0.20 || rightIrisYShift < -0.20;
 
       // ── Head position in frame ──────────────────────────────────────────────
       const faceCenterY = (face.topLeft?.[1] + face.bottomRight?.[1]) / 2;
@@ -553,10 +614,10 @@ export function useDetection({
       const headTooHigh = faceCenterY < (video.videoHeight || 1) * 0.15;
 
       return (
-        noseOffsetRatio > 0.38 ||   // clearer horizontal head turn
-        turnRatio > 2.2 ||          // strong rotational asymmetry
-        leftIrisXShift > 0.48 ||    // extreme horizontal eye movement
-        rightIrisXShift > 0.48 ||   // extreme horizontal eye movement
+        noseOffsetRatio > 0.34 ||   // clearer horizontal head turn
+        turnRatio > 2.0 ||          // strong rotational asymmetry
+        leftIrisXShift > 0.44 ||    // extreme horizontal eye movement
+        rightIrisXShift > 0.44 ||   // extreme horizontal eye movement
         lookingDown ||              // eyes directed downward (phone/notes on desk)
         lookingUp ||                // eyes directed upward (suspicious)
         headTooLow ||
@@ -571,10 +632,10 @@ export function useDetection({
     const w = video.videoWidth || 1;
     const h = video.videoHeight || 1;
     return (
-      centerX < w * 0.20 ||
-      centerX > w * 0.80 ||
-      centerY < h * 0.18 ||  // head too high (looking up/out)
-      centerY > h * 0.72     // head too low (looking down/away)
+      centerX < w * 0.25 ||
+      centerX > w * 0.75 ||
+      centerY < h * 0.22 ||  // head too high (looking up/out)
+      centerY > h * 0.68     // head too low (looking down/away)
     );
   }
 
@@ -707,6 +768,51 @@ export function useDetection({
     };
   }
 
+  function getDeskCapture(video) {
+    const canvas = deskCanvasRef.current;
+    const srcW = video.videoWidth || 0;
+    const srcH = video.videoHeight || 0;
+    if (!srcW || !srcH) return null;
+
+    const bandTop = Math.floor(srcH * 0.40); // focus lower 60% (desk/hand/phone/book)
+    const bandH = Math.max(1, Math.floor(srcH * 0.60));
+    const bandW = srcW;
+
+    canvas.width = bandW;
+    canvas.height = bandH;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return null;
+
+    ctx.drawImage(video, 0, bandTop, bandW, bandH, 0, 0, bandW, bandH);
+    return {
+      canvas,
+      imageData: ctx.getImageData(0, 0, bandW, bandH),
+    };
+  }
+
+  function getDeskRightCapture(video) {
+    const canvas = deskRightCanvasRef.current;
+    const srcW = video.videoWidth || 0;
+    const srcH = video.videoHeight || 0;
+    if (!srcW || !srcH) return null;
+
+    const bandTop = Math.floor(srcH * 0.38);
+    const bandH = Math.max(1, Math.floor(srcH * 0.62));
+    const bandW = Math.max(1, Math.floor(srcW * 0.55));
+    const bandLeft = Math.floor(srcW * 0.45); // right half
+
+    canvas.width = bandW;
+    canvas.height = bandH;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return null;
+
+    ctx.drawImage(video, bandLeft, bandTop, bandW, bandH, 0, 0, bandW, bandH);
+    return {
+      canvas,
+      imageData: ctx.getImageData(0, 0, bandW, bandH),
+    };
+  }
+
   function captureSnapshot(video) {
     const canvas = snapshotCanvasRef.current;
     if (!video.videoWidth || !video.videoHeight) {
@@ -754,5 +860,5 @@ export function useDetection({
     Promise.resolve(onViolation?.(payload)).catch(() => null);
   }
 
-  return { suspicionScore, violationsCount, detectorStatus };
+  return { suspicionScore, violationsCount, detectorStatus, debugMeta };
 }

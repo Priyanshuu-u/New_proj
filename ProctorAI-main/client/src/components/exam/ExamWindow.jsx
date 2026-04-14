@@ -107,7 +107,7 @@ export default function ExamWindow() {
     async function setupCam() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
           audio: false,
         });
         if (!isMounted) return;
@@ -215,7 +215,7 @@ export default function ExamWindow() {
     Boolean(test && session),
   );
 
-  const { suspicionScore, violationsCount, detectorStatus } = useDetection({
+  const { suspicionScore, violationsCount, detectorStatus, debugMeta } = useDetection({
     videoRef,
     active: Boolean(test && session && cameraReady),
     preload: Boolean(test && !session && cameraReady),
@@ -423,7 +423,7 @@ export default function ExamWindow() {
 
       {/* Main content */}
       <div className="shell flex-1 py-6">
-        <div className="grid gap-5 md:grid-cols-[1fr,320px]">
+        <div className="grid gap-6 xl:gap-8 lg:grid-cols-[minmax(520px,1fr),520px]">
           {/* Questions */}
           <QuestionPanel
             questions={questions}
@@ -434,7 +434,7 @@ export default function ExamWindow() {
           {/* Proctor sidebar */}
           <div className="space-y-4">
             {/* Webcam card */}
-            <div className="card-dark space-y-4">
+            <div className="card-dark space-y-4 w-full">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-[11px] uppercase tracking-[0.14em] text-white/60 font-semibold">
@@ -492,6 +492,20 @@ export default function ExamWindow() {
                   tone={isFullscreen ? "green" : "amber"}
                 />
               </div>
+
+              {import.meta.env.VITE_PROCTOR_DEBUG === "true" && (
+                <div className="rounded-lg bg-white/10 text-white/80 text-[11px] px-3 py-2 space-y-1">
+                  <p className="font-semibold uppercase tracking-[0.18em] text-white/60">Debug</p>
+                  <div className="grid grid-cols-2 gap-x-2">
+                    <span>Detector:</span><span className="font-semibold">{statusLabel}</span>
+                    <span>Faces:</span><span>{debugMeta?.faces ?? "n/a"}</span>
+                    <span>Phone:</span><span>{debugMeta?.phone ? "yes" : "no"}</span>
+                    <span>Book:</span><span>{debugMeta?.book ? "yes" : "no"}</span>
+                    <span>Face mode:</span><span>{debugMeta?.faceMode || "n/a"}</span>
+                    <span>Object mode:</span><span>{debugMeta?.objectMode || "n/a"}</span>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Submit button */}
