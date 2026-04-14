@@ -22,7 +22,7 @@ services:
       - key: CLIENT_URL
         value: https://proctorai-client.onrender.com
 
-  - type: static_site
+  - type: static
     name: proctorai-client
     buildCommand: |
       cd client && npm install && npm run build
