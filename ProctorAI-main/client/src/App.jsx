@@ -15,9 +15,22 @@ import SessionPage from "./pages/student/SessionPage.jsx";
 import ResultPage from "./pages/student/ResultPage.jsx";
 import ProtectedRoute from "./components/common/ProtectedRoute.jsx";
 import { useAuth } from "./context/AuthContext.jsx";
+import { useEffect, useState } from "react";
 
 function NavBar() {
   const { user, logout } = useAuth();
+  const [theme, setTheme] = useState(
+    () => localStorage.getItem("theme") || "light",
+  );
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("theme", theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme((t) => (t === "light" ? "dark" : "light"));
+  };
 
   return (
     <header className="border-b border-slate-200 bg-white shadow-sm sticky top-0 z-50">
@@ -31,6 +44,13 @@ function NavBar() {
           </span>
           ProctorAI
         </Link>
+
+        <button
+          onClick={toggleTheme}
+          className="text-xs px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100 transition"
+        >
+          {theme === "light" ? "Dark mode" : "Light mode"}
+        </button>
 
         {user ? (
           <div className="flex items-center gap-1">

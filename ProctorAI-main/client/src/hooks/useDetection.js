@@ -15,6 +15,32 @@ const POINTS = {
   context_menu: 4,
 };
 
+const COOLDOWNS = {
+  gaze_away: 1600,
+  phone_detected: 1800,
+  book_detected: 1800,
+  multiple_faces: 2000,
+  no_face: 1800,
+  fullscreen_exit: 1800,
+  tab_switch: 2000,
+  window_blur: 1800,
+  copy: 1500,
+  cut: 1500,
+  paste: 2000,
+  context_menu: 1500,
+  default: 1800,
+};
+
+const OBJECT_THRESHOLDS = {
+  // Aggressive thresholds for edge-of-frame objects.
+  yolo: { phone: 0.14, book: 0.12 },
+  coco: { phone: 0.14, book: 0.12 },
+};
+
+const OBJECT_STREAK_TARGET = 1; // consecutive frames needed before flagging
+const GAZE_STREAK_TARGET = 2; // frames looking away before warning
+const DETECTION_INTERVAL_MS = 300;
+
 export function useDetection({
   videoRef,
   active,
@@ -27,10 +53,18 @@ export function useDetection({
   const [suspicionScore, setSuspicionScore] = useState(0);
   const [violationsCount, setViolationsCount] = useState(0);
   const [detectorStatus, setDetectorStatus] = useState("initializing");
+  const [debugMeta, setDebugMeta] = useState({
+    faces: 0,
+    phone: false,
+    book: false,
+    faceMode: "none",
+    objectMode: "none",
+  });
   const awayStreak = useRef(0);
   const modelsRef = useRef({
     ready: false,
     faceMesh: null,
+    faceDetector: null,
     objectDetector: null,
     cocoModel: null,
     faceMode: "none",
@@ -38,10 +72,11 @@ export function useDetection({
   });
   const frameCanvasRef = useRef(document.createElement("canvas"));
   const snapshotCanvasRef = useRef(document.createElement("canvas"));
+  const deskCanvasRef = useRef(document.createElement("canvas"));
+  const deskRightCanvasRef = useRef(document.createElement("canvas"));
   const loadingRef = useRef(false);
   const lastViolationAtRef = useRef({});
-  const detectionTickRef = useRef(0);
-  const recentObjectHitRef = useRef({ phone: 0, book: 0 });
+  const objectStreakRef = useRef({ phone: 0, book: 0 });
   const retryTimeoutRef = useRef(null);
   const [retryTick, setRetryTick] = useState(0);
 
@@ -54,7 +89,7 @@ export function useDetection({
     const hasObjectModel = Boolean(
       modelsRef.current.objectDetector || modelsRef.current.cocoModel,
     );
-    if (!(active || preload) || loadingRef.current || hasObjectModel) return;
+    if (loadingRef.current || hasObjectModel) return;
 
     loadingRef.current = true;
     setDetectorStatus("loading");
@@ -65,6 +100,7 @@ export function useDetection({
       let objectMode = "none";
       let faceMeshInstance = null;
       let faceMeshDetector = null;
+      let blazeFaceDetector = null;
       let objectDetector = null;
       let cocoModel = null;
 
@@ -131,20 +167,25 @@ export function useDetection({
       }
 
       try {
-        const { pipeline, env } = await import("@xenova/transformers");
-
-        env.allowLocalModels = false;
-        env.allowRemoteModels = true;
-        env.useBrowserCache = true;
-
-        objectDetector = await pipeline("object-detection", "Xenova/yolov8s");
-        objectMode = "yolov8s";
+        const tf = await import("@tensorflow/tfjs");
+        const blazeface = await import("@tensorflow-models/blazeface");
+        await tf.ready();
+        try {
+          await tf.setBackend("webgl");
+        } catch (_e) {
+          await tf.setBackend("cpu");
+        }
+        blazeFaceDetector = await blazeface.load({ maxFaces: 4 });
+        if (faceMode === "none") {
+          faceMode = "blazeface";
+        } else {
+          faceMode = `${faceMode}+blazeface`;
+        }
       } catch (_error) {
-        objectDetector = null;
-        objectMode = "none";
+        blazeFaceDetector = null;
       }
 
-      // Reliability fallback: keep a second object model path active.
+      // 1) Load COCO-SSD first (fast, reliable)
       try {
         const cocoSsd = await import("@tensorflow-models/coco-ssd");
         const tf = await import("@tensorflow/tfjs");
@@ -156,14 +197,35 @@ export function useDetection({
         }
         await tf.ready();
         cocoModel = await cocoSsd.load();
-        objectMode = objectMode === "none" ? "coco-ssd" : `${objectMode}+coco`;
+        objectMode = "coco-ssd";
       } catch (_error) {
         cocoModel = null;
       }
 
+      // 2) Load YOLOv8s (Xenova) if possible
+      try {
+        const { pipeline, env } = await import("@xenova/transformers");
+
+        env.allowLocalModels = false;
+        env.allowRemoteModels = true;
+        env.useBrowserCache = true;
+
+        objectDetector = await pipeline("object-detection", "Xenova/yolov8s");
+        objectMode =
+          objectMode === "none" ? "yolov8s" : `${objectMode}+yolov8s`;
+      } catch (_error) {
+        objectDetector = objectDetector || null;
+      }
+
       modelsRef.current = {
-        ready: Boolean(faceMeshDetector || objectDetector || cocoModel),
+        ready: Boolean(
+          faceMeshDetector ||
+          blazeFaceDetector ||
+          objectDetector ||
+          cocoModel,
+        ),
         faceMesh: faceMeshDetector,
+        faceDetector: blazeFaceDetector,
         objectDetector,
         cocoModel,
         faceMode,
@@ -176,6 +238,20 @@ export function useDetection({
           : `face:${faceMode}|object:${objectMode}`;
       setDetectorStatus(status);
       onStatus?.(status);
+      setDebugMeta((prev) => ({
+        ...prev,
+        faceMode,
+        objectMode,
+      }));
+
+      if (!objectDetector && !cocoModel) {
+        retryTimeoutRef.current = window.setTimeout(() => {
+          loadingRef.current = false;
+          setDetectorStatus("retrying");
+          onStatus?.("retrying");
+          setRetryTick((v) => v + 1);
+        }, 4000);
+      }
 
       if (!objectDetector && !cocoModel) {
         retryTimeoutRef.current = window.setTimeout(() => {
@@ -262,7 +338,7 @@ export function useDetection({
 
     const loopId = window.setInterval(() => {
       runDetectionCycle().catch(() => null);
-    }, 1200);
+    }, DETECTION_INTERVAL_MS);
 
     const decayId = window.setInterval(() => {
       setSuspicionScore((prev) => Math.max(0, prev - 1));
@@ -289,71 +365,90 @@ export function useDetection({
   }
 
   async function runFaceAndObjectDetection(video) {
-    const { objectDetector, cocoModel, faceMesh, faceMode, objectMode } =
-      modelsRef.current;
-    const faces = await detectFaces(faceMesh, faceMode, video);
+    const {
+      objectDetector,
+      cocoModel,
+      faceMesh,
+      faceDetector,
+      faceMode,
+      objectMode,
+    } = modelsRef.current;
+    const faces = await detectFaces(faceMesh, faceDetector, faceMode, video);
     const faceCount = faces.length;
 
     if (faceCount === 0) {
+      awayStreak.current = 0;
+      objectStreakRef.current.phone = 0;
+      objectStreakRef.current.book = 0;
       logViolation("no_face", "high", "", video);
-    } else {
-      const firstFace = faces[0];
-      const isOffCenter = isFaceLookingAway(firstFace, faceMode, video);
-
-      if (isOffCenter) {
-        awayStreak.current += 1;
-        if (awayStreak.current >= 2) {
-          logViolation("gaze_away", "low", "", video);
-          awayStreak.current = 0;
-        }
-      } else {
-        awayStreak.current = 0;
-      }
     }
 
     if (faceCount > 1) {
       logViolation("multiple_faces", "high", "", video);
     }
 
-    const shouldRunObjectDetection =
-      detectionTickRef.current % 1 === 0 ||
-      recentObjectHitRef.current.phone > 0 ||
-      recentObjectHitRef.current.book > 0;
-    detectionTickRef.current += 1;
+    const firstFace = faces[0];
+    const isOffCenter = isFaceLookingAway(firstFace, faceMode, video);
+    if (isOffCenter) {
+      awayStreak.current += 1;
+      if (awayStreak.current >= GAZE_STREAK_TARGET) {
+        logViolation("gaze_away", "low", "", video);
+        awayStreak.current = 0;
+      }
+    } else {
+      awayStreak.current = 0;
+    }
 
     let phoneDetectedNow = false;
     let bookDetectedNow = false;
     let phoneSnapshotNow = "";
     let bookSnapshotNow = "";
 
-    if (!shouldRunObjectDetection) {
-      return;
-    }
-
     const frame = getFrameCapture(video);
+    const deskFrame = getDeskCapture(video);
+    const deskRightFrame = getDeskRightCapture(video);
 
     if (objectDetector && frame?.imageData) {
       try {
-        const yoloPredictions = await objectDetector(frame.imageData, {
-          threshold: 0.01,
+        const baseCall = objectDetector(frame.imageData, {
+          threshold: 0.008,
           topk: 50,
         });
+        const deskCall =
+          deskFrame?.imageData &&
+          objectDetector(deskFrame.imageData, { threshold: 0.008, topk: 50 });
+        const deskRightCall =
+          deskRightFrame?.imageData &&
+          objectDetector(deskRightFrame.imageData, { threshold: 0.008, topk: 50 });
 
-        const normalizedYolo = normalizeObjectPredictions(yoloPredictions);
+        const [basePreds, deskPreds, deskRightPreds] = await Promise.all([
+          baseCall.catch(() => []),
+          deskCall ? deskCall.catch(() => []) : Promise.resolve([]),
+          deskRightCall ? deskRightCall.catch(() => []) : Promise.resolve([]),
+        ]);
+
+        const normalizedYolo = normalizeObjectPredictions([
+          ...(basePreds || []),
+          ...(deskPreds || []),
+          ...(deskRightPreds || []),
+        ]);
         const phoneMatch = normalizedYolo.find(
-          (item) => isPhoneLabel(item.label) && item.score >= 0.015,
+          (item) =>
+            isPhoneLabel(item.label) &&
+            item.score >= OBJECT_THRESHOLDS.yolo.phone,
         );
         const bookMatch = normalizedYolo.find(
-          (item) => isBookLabel(item.label) && item.score >= 0.015,
+          (item) =>
+            isBookLabel(item.label) && item.score >= OBJECT_THRESHOLDS.yolo.book,
         );
 
         if (phoneMatch) {
           phoneDetectedNow = true;
-          phoneSnapshotNow = captureSnapshot(video);
+          phoneSnapshotNow = phoneSnapshotNow || captureSnapshot(video);
         }
         if (bookMatch) {
           bookDetectedNow = true;
-          bookSnapshotNow = captureSnapshot(video);
+          bookSnapshotNow = bookSnapshotNow || captureSnapshot(video);
         }
       } catch (_error) {
         setDetectorStatus("partial_error_object:yolo");
@@ -363,26 +458,41 @@ export function useDetection({
 
     if (cocoModel && frame?.canvas) {
       try {
-        const cocoPredictions = await cocoModel.detect(frame.canvas, 20, 0.01);
-        const normalizedCoco = normalizeObjectPredictions(cocoPredictions);
-        
+        const cocoPredictions = await cocoModel.detect(frame.canvas, 20, 0.005);
+        const deskPredictions = deskFrame?.canvas
+          ? await cocoModel.detect(deskFrame.canvas, 20, 0.005)
+          : [];
+        const deskRightPredictions = deskRightFrame?.canvas
+          ? await cocoModel.detect(deskRightFrame.canvas, 20, 0.005)
+          : [];
+
+        const normalizedCoco = normalizeObjectPredictions([
+          ...(cocoPredictions || []),
+          ...(deskPredictions || []),
+          ...(deskRightPredictions || []),
+        ]);
+
         if (!phoneDetectedNow) {
           const phoneMatch = normalizedCoco.find(
-            (item) => isPhoneLabel(item.label) && item.score >= 0.02,
+            (item) =>
+              isPhoneLabel(item.label) &&
+              item.score >= OBJECT_THRESHOLDS.coco.phone,
           );
           if (phoneMatch) {
             phoneDetectedNow = true;
-            phoneSnapshotNow = captureSnapshot(video);
+            phoneSnapshotNow = phoneSnapshotNow || captureSnapshot(video);
           }
         }
 
         if (!bookDetectedNow) {
           const bookMatch = normalizedCoco.find(
-            (item) => isBookLabel(item.label) && item.score >= 0.02,
+            (item) =>
+              isBookLabel(item.label) &&
+              item.score >= OBJECT_THRESHOLDS.coco.book,
           );
           if (bookMatch) {
             bookDetectedNow = true;
-            bookSnapshotNow = captureSnapshot(video);
+            bookSnapshotNow = bookSnapshotNow || captureSnapshot(video);
           }
         }
       } catch (_error) {
@@ -393,28 +503,40 @@ export function useDetection({
       }
     }
 
-    const now = Date.now();
-    if (phoneDetectedNow) {
-      recentObjectHitRef.current.phone = now;
-    }
-    if (bookDetectedNow) {
-      recentObjectHitRef.current.book = now;
-    }
+    objectStreakRef.current.phone = phoneDetectedNow
+      ? objectStreakRef.current.phone + 1
+      : 0;
+    objectStreakRef.current.book = bookDetectedNow
+      ? objectStreakRef.current.book + 1
+      : 0;
 
-    const phoneDetected = now - recentObjectHitRef.current.phone < 3000;
-    const bookDetected = now - recentObjectHitRef.current.book < 3000;
-
-    if (phoneDetected) {
+    if (
+      phoneDetectedNow &&
+      objectStreakRef.current.phone >= OBJECT_STREAK_TARGET
+    ) {
       logViolation("phone_detected", "high", phoneSnapshotNow || "", video);
+      objectStreakRef.current.phone = 0;
     }
 
-    if (bookDetected) {
+    if (
+      bookDetectedNow &&
+      objectStreakRef.current.book >= OBJECT_STREAK_TARGET
+    ) {
       logViolation("book_detected", "medium", bookSnapshotNow || "", video);
+      objectStreakRef.current.book = 0;
     }
+
+    setDebugMeta({
+      faces: faceCount,
+      phone: phoneDetectedNow,
+      book: bookDetectedNow,
+      faceMode,
+      objectMode,
+    });
   }
 
   function isFaceLookingAway(face, faceMode, video) {
-    if (faceMode === "mediapipe" && Array.isArray(face.landmarks)) {
+    if (faceMode.includes("mediapipe") && Array.isArray(face.landmarks)) {
       const lm = face.landmarks;
       const nose = lm[1];
       const leftEyeOuter = lm[33];
@@ -481,9 +603,9 @@ export function useDetection({
           : 0;
 
       // Positive Y shift = iris moved toward lower lid = looking DOWN
-      const lookingDown = leftIrisYShift > 0.30 || rightIrisYShift > 0.30;
+      const lookingDown = leftIrisYShift > 0.14 || rightIrisYShift > 0.14;
       // Negative Y shift = iris moved toward upper lid = looking UP (also suspicious)
-      const lookingUp = leftIrisYShift < -0.35 || rightIrisYShift < -0.35;
+      const lookingUp = leftIrisYShift < -0.20 || rightIrisYShift < -0.20;
 
       // ── Head position in frame ──────────────────────────────────────────────
       const faceCenterY = (face.topLeft?.[1] + face.bottomRight?.[1]) / 2;
@@ -492,12 +614,12 @@ export function useDetection({
       const headTooHigh = faceCenterY < (video.videoHeight || 1) * 0.15;
 
       return (
-        noseOffsetRatio > 0.35 ||   // clear horizontal head turn
-        turnRatio > 2.2 ||           // strong rotational asymmetry
-        leftIrisXShift > 0.48 ||     // extreme horizontal eye movement
-        rightIrisXShift > 0.48 ||    // extreme horizontal eye movement
-        lookingDown ||               // eyes directed downward (phone/notes on desk)
-        lookingUp ||                 // eyes directed upward (suspicious)
+        noseOffsetRatio > 0.34 ||   // clearer horizontal head turn
+        turnRatio > 2.0 ||          // strong rotational asymmetry
+        leftIrisXShift > 0.44 ||    // extreme horizontal eye movement
+        rightIrisXShift > 0.44 ||   // extreme horizontal eye movement
+        lookingDown ||              // eyes directed downward (phone/notes on desk)
+        lookingUp ||                // eyes directed upward (suspicious)
         headTooLow ||
         headTooHigh
       );
@@ -506,24 +628,44 @@ export function useDetection({
     const topLeft = face.topLeft || [0, 0];
     const bottomRight = face.bottomRight || [0, 0];
     const centerX = (topLeft[0] + bottomRight[0]) / 2;
+    const centerY = (topLeft[1] + bottomRight[1]) / 2;
     const w = video.videoWidth || 1;
-    return centerX < w * 0.18 || centerX > w * 0.82;
+    const h = video.videoHeight || 1;
+    return (
+      centerX < w * 0.25 ||
+      centerX > w * 0.75 ||
+      centerY < h * 0.22 ||  // head too high (looking up/out)
+      centerY > h * 0.68     // head too low (looking down/away)
+    );
   }
 
-  async function detectFaces(faceMesh, faceMode, video) {
-    if (!faceMesh) return [];
-
-    try {
-      if (faceMode === "mediapipe") {
-        return await faceMesh.detect(video);
+  async function detectFaces(faceMesh, blazeDetector, faceMode, video) {
+    // Prefer MediaPipe for landmarks; fall back to BlazeFace for multi-face counts.
+    if (faceMesh) {
+      try {
+        const faces = await faceMesh.detect(video);
+        if (faces && faces.length) return faces;
+      } catch (_error) {
+        setDetectorStatus("partial_error_face:mesh");
+        onStatus?.("partial_error_face:mesh");
       }
-
-      return [];
-    } catch (_error) {
-      setDetectorStatus("partial_error");
-      onStatus?.("partial_error");
-      return [];
     }
+
+    if (blazeDetector) {
+      try {
+        const preds = await blazeDetector.estimateFaces(video, false);
+        return preds.map((p) => ({
+          topLeft: p.topLeft,
+          bottomRight: p.bottomRight,
+          landmarks: p.landmarks || [],
+        }));
+      } catch (_error) {
+        setDetectorStatus("partial_error_face:blaze");
+        onStatus?.("partial_error_face:blaze");
+      }
+    }
+
+    return [];
   }
 
   function landmarksToFaceBox(landmarks, video) {
@@ -626,6 +768,51 @@ export function useDetection({
     };
   }
 
+  function getDeskCapture(video) {
+    const canvas = deskCanvasRef.current;
+    const srcW = video.videoWidth || 0;
+    const srcH = video.videoHeight || 0;
+    if (!srcW || !srcH) return null;
+
+    const bandTop = Math.floor(srcH * 0.40); // focus lower 60% (desk/hand/phone/book)
+    const bandH = Math.max(1, Math.floor(srcH * 0.60));
+    const bandW = srcW;
+
+    canvas.width = bandW;
+    canvas.height = bandH;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return null;
+
+    ctx.drawImage(video, 0, bandTop, bandW, bandH, 0, 0, bandW, bandH);
+    return {
+      canvas,
+      imageData: ctx.getImageData(0, 0, bandW, bandH),
+    };
+  }
+
+  function getDeskRightCapture(video) {
+    const canvas = deskRightCanvasRef.current;
+    const srcW = video.videoWidth || 0;
+    const srcH = video.videoHeight || 0;
+    if (!srcW || !srcH) return null;
+
+    const bandTop = Math.floor(srcH * 0.38);
+    const bandH = Math.max(1, Math.floor(srcH * 0.62));
+    const bandW = Math.max(1, Math.floor(srcW * 0.55));
+    const bandLeft = Math.floor(srcW * 0.45); // right half
+
+    canvas.width = bandW;
+    canvas.height = bandH;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return null;
+
+    ctx.drawImage(video, bandLeft, bandTop, bandW, bandH, 0, 0, bandW, bandH);
+    return {
+      canvas,
+      imageData: ctx.getImageData(0, 0, bandW, bandH),
+    };
+  }
+
   function captureSnapshot(video) {
     const canvas = snapshotCanvasRef.current;
     if (!video.videoWidth || !video.videoHeight) {
@@ -646,15 +833,7 @@ export function useDetection({
   function logViolation(type, severity, snapshot = "", video = null) {
     const now = Date.now();
     const last = lastViolationAtRef.current[type] || 0;
-    const cooldown =
-      type === "window_blur" ||
-      type === "paste" ||
-      type === "copy" ||
-      type === "cut"
-        ? 1500
-        : type === "gaze_away"
-          ? 2500
-          : 3500;
+    const cooldown = COOLDOWNS[type] ?? COOLDOWNS.default;
     if (now - last < cooldown) {
       return;
     }
@@ -681,5 +860,5 @@ export function useDetection({
     Promise.resolve(onViolation?.(payload)).catch(() => null);
   }
 
-  return { suspicionScore, violationsCount, detectorStatus };
+  return { suspicionScore, violationsCount, detectorStatus, debugMeta };
 }
